@@ -29,3 +29,7 @@ class Settings(BaseSettings):
     # Job queue
     MAX_QUEUE_SIZE: int = 100
     WORKER_COUNT: int   = 4
+    
+
+# ── Global Settings Instance ──────────────────────────
+settings = Settings()

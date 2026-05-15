@@ -8,10 +8,10 @@ At a high level, this service acts as an intelligent proxy between your applicat
 
 **Core Capabilities:**
 1. **Deep Rendering**: Uses headless Chromium (via Playwright) to execute JavaScript, ensuring Single Page Applications (SPAs) and dynamic content are fully loaded.
-2. **Stealth Mode**: Automatically strips automated browser signatures to bypass basic bot-detection mechanisms (WAFs, Cloudflare checks).
+2. **Stealth & Stateful Sessions**: Automatically strips automated browser signatures and allows reusing cookies, proxies, and context via a `session_id` for multi-step scraping.
 3. **Async Orchestration**: Accepts requests instantly and processes the heavy browser rendering in a background worker queue to prevent API blocking.
-4. **Insight Extraction**: Automatically parses the DOM to extract SEO signals (meta tags, open graph), counts words, maps link topology (internal vs. external links), and captures full-page screenshots.
-5. **Self-Healing**: Wraps network requests in Circuit Breakers and Exponential Backoff retries. If a site temporarily drops the connection, the service waits and tries again automatically.
+4. **AI-Optimized Extraction**: Automatically parses the DOM to extract pure, actionable data (emails, phones, social links, SEO tags). Text extraction is intelligently truncated (15k limit) to prevent LLM/n8n pipeline crashes.
+5. **Self-Healing & Optimized**: Wraps network requests in configurable Circuit Breakers and Exponential Backoff retries. Automatically blocks heavy media requests (images/fonts) to save bandwidth.
 
 ---
 
@@ -46,11 +46,11 @@ curl -X POST http://127.0.0.1:8000/analyze \
      -d '{"url": "https://news.ycombinator.com/"}'
 ```
 
-**Optional:** Wait for a specific element to load before scraping:
+**Optional:** Wait for a specific element to load or reuse an existing session:
 ```bash
 curl -X POST http://127.0.0.1:8000/analyze \
      -H "Content-Type: application/json" \
-     -d '{"url": "https://react.dev/", "wait_selector": ".nav-main"}'
+     -d '{"url": "https://react.dev/", "wait_selector": ".nav-main", "session_id": "user_123"}'
 ```
 
 **Response:**
@@ -78,33 +78,20 @@ curl -X GET http://127.0.0.1:8000/jobs/a1b2c3d4e5f647339fadb09559aad284
   "created_at": "2026-05-14T20:55:24.697Z",
   "duration_ms": 4120.5,
   "insights": {
-    "content": {
-      "title": "React – A JavaScript library for building user interfaces",
-      "word_count": 1450,
-      "text_length": 9500,
-      "html_length": 45000
-    },
     "seo": {
-      "has_title": true,
-      "has_meta_description": true,
-      "has_open_graph": true,
-      "has_twitter_cards": true,
-      "meta_tag_count": 12
+      "title": "React – A JavaScript library for building user interfaces",
+      "description": "The library for web and native user interfaces"
     },
-    "links": {
-      "total": 45,
-      "internal": 40,
-      "external": 5,
-      "top_external_domains": [
-        {"domain": "github.com", "count": 3},
-        {"domain": "twitter.com", "count": 2}
+    "content": {
+      "text": "React is a library for web and native user interfaces... [Content Truncated]"
+    },
+    "leads": {
+      "emails": ["hello@react.dev"],
+      "phones": [],
+      "social_links": [
+        "https://twitter.com/reactjs",
+        "https://github.com/facebook/react"
       ]
-    },
-    "performance": {
-      "final_url": "https://react.dev/",
-      "status_code": 200,
-      "is_redirect": false,
-      "has_screenshot": true
     }
   }
 }

@@ -23,6 +23,9 @@ class BlockedError(Exception):
 class TransientNetworkError(Exception):
     """Raised on timeout / connection reset."""
 
+class NotFoundError(Exception):
+    """Raised on HTTP 404."""
+
 
 # ── Retry decorator (wraps async callables) ───────────────────────────────────
 RETRYABLE = (RateLimitError, TransientNetworkError)

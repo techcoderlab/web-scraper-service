@@ -12,15 +12,18 @@ from domain.models import PageSnapshot
 from domain.ports import BrowserPort
 from infrastructure.browser_pool import BrowserPool
 from infrastructure.resilience import (
-    BlockedError, RateLimitError, TransientNetworkError,
+    BlockedError, RateLimitError, TransientNetworkError, NotFoundError,
     with_backoff, with_circuit_breaker,
 )
+
+from application.config import settings
 
 log = structlog.get_logger(__name__)
 
 # ── Status-code → exception mapping ──────────────────────────────────────────
 _STATUS_MAP: dict[int, type[Exception]] = {
     403: BlockedError,
+    404: NotFoundError,
     429: RateLimitError,
 }
 
@@ -31,27 +34,37 @@ class PlaywrightScraper(BrowserPort):
         self._pool = pool
 
     # Pillar 6: circuit breaker wraps backoff
-    @with_circuit_breaker(failure_threshold=5, recovery_timeout=30)
-    @with_backoff(max_attempts=5, base_wait=2.0, max_wait=60.0)
+    @with_circuit_breaker(failure_threshold=settings.CB_FAILURE_THRESHOLD, recovery_timeout=settings.CB_RECOVERY_TIMEOUT)
+    @with_backoff(max_attempts=settings.BACKOFF_MAX_ATTEMPTS, base_wait=settings.BACKOFF_BASE_WAIT, max_wait=settings.BACKOFF_MAX_WAIT)
     async def fetch(
         self,
         url: str,
         *,
         wait_selector: str | None = None,
         timeout_ms: int = 60_000,
+        session_id: str | None = None,
     ) -> PageSnapshot:
         t0 = time.monotonic()
 
         # Pillar 7: bind trace fields to all log calls in this span
         structlog.contextvars.bind_contextvars(url=url)
 
-        async with self._pool.acquire() as ctx:
+        async with self._pool.acquire_session(session_id) as ctx:
             page = await ctx.new_page()
+            
+            # Pillar 4: Proxy Cost & Bandwidth Optimization
+            # Block expensive resources that aren't needed for text analysis
+            await page.route("**/*", lambda route: 
+                route.abort() if route.request.resource_type in ["image", "media", "font", "imageset"] 
+                else route.continue_()
+            )
+
             try:
                 log.info("fetch_start")
+                # Use "commit" to get headers as fast as possible (saves bandwidth if we abort early)
                 response = await page.goto(
                     url,
-                    wait_until="load",
+                    wait_until="commit",
                     timeout=timeout_ms,
                 )
                 if response is None:
@@ -62,6 +75,9 @@ class PlaywrightScraper(BrowserPort):
 
                 if status in _STATUS_MAP:
                     raise _STATUS_MAP[status](f"HTTP {status} from {url}")
+
+                # If status is OK, we then wait for the full page to be ready for extraction
+                await page.wait_for_load_state("load", timeout=timeout_ms)
 
                 if wait_selector:
                     await page.wait_for_selector(wait_selector, timeout=timeout_ms)
@@ -75,8 +91,8 @@ class PlaywrightScraper(BrowserPort):
             except PWTimeout as exc:
                 log.warning("fetch_timeout", error=str(exc))
                 raise TransientNetworkError(str(exc)) from exc
-            except (BlockedError, RateLimitError):
-                raise  # let resilience decorators handle
+            except (BlockedError, RateLimitError, NotFoundError):
+                raise  # let resilience decorators handle (NotFoundError will not be retried)
             except Exception as exc:
                 log.error("fetch_error", error=str(exc), exc_info=True)
                 raise TransientNetworkError(str(exc)) from exc
@@ -103,8 +119,21 @@ class PlaywrightScraper(BrowserPort):
 
     async def _build_snapshot(self, page, url: str, status: int) -> PageSnapshot:
         """Extract structured data from live page DOM."""
-        title = await page.title()
-        html  = await page.content()
+        
+        # Pillar 6: Handle transient "navigating" state if site redirects after 'load' event
+        # We try to get content up to 3 times with a small delay before erroring to the retry decorator
+        for attempt in range(3):
+            try:
+                title = await page.title()
+                html  = await page.content()
+                break
+            except Exception as exc:
+                err_msg = str(exc).lower()
+                if "navigating" in err_msg and attempt < 2:
+                    log.warning("snapshot_navigation_retry", attempt=attempt + 1, url=url)
+                    await asyncio.sleep(2.0)
+                    continue
+                raise
         
         # Remove junk elements using JavaScript
         await page.evaluate("""() => {

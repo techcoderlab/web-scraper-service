@@ -20,7 +20,7 @@ import structlog
 from domain.models import AnalysisResult, AnalysisStatus, PageSnapshot
 from domain.ports import AnalysisRepository, BrowserPort
 from application.task_queue import TaskQueue
-from application.extractor_utils import DataExtractor
+from application.extractor_utils import DataExtractor, LinkExtractor
 
 log = structlog.get_logger(__name__)
 
@@ -53,6 +53,7 @@ class AnalysisService:
         self,
         url: str,
         wait_selector: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         """Create a pending analysis job and enqueue for background processing.
 
@@ -77,7 +78,7 @@ class AnalysisService:
         await self._repo.save(result)
 
         # Enqueue background work — raises QueueFullError if full (Pillar 3)
-        await self._queue.enqueue(self._process_job, job_id, url, wait_selector)
+        await self._queue.enqueue(self._process_job, job_id, url, wait_selector, session_id)
 
         log.info("analysis_submitted", job_id=job_id, url=url)
         return job_id
@@ -111,6 +112,7 @@ class AnalysisService:
         job_id: str,
         url: str,
         wait_selector: str | None,
+        session_id: str | None = None,
     ) -> None:
         """Execute the scraping + analysis pipeline for a single job.
 
@@ -121,8 +123,9 @@ class AnalysisService:
             job_id: Unique job identifier.
             url: Target URL to scrape.
             wait_selector: Optional CSS selector to await.
+            session_id: Optional session identifier.
         """
-        structlog.contextvars.bind_contextvars(job_id=job_id, url=url)
+        structlog.contextvars.bind_contextvars(job_id=job_id, url=url, session_id=session_id)
 
         # MUTATION: transition to RUNNING
         result = await self._repo.get(job_id)
@@ -136,7 +139,7 @@ class AnalysisService:
 
         try:
             t0 = time.monotonic()
-            snapshot = await self._browser.fetch(url, wait_selector=wait_selector)
+            snapshot = await self._browser.fetch(url, wait_selector=wait_selector, session_id=session_id)
             elapsed_ms = (time.monotonic() - t0) * 1000
 
             # MUTATION: populate result with successful outcome
@@ -186,9 +189,9 @@ class AnalysisService:
         }
         
         base_insights["leads"] = {
-            "emails": DataExtractor.find_emails(snapshot.text),
-            "phones": DataExtractor.find_contacts(snapshot.text),
-            "social_links": DataExtractor.find_social_links(snapshot.links),
+            "emails": DataExtractor.find_emails(snapshot.html),
+            "phones": DataExtractor.find_contacts(snapshot.html),
+            "social_links": LinkExtractor.find_social_links(snapshot.links),
         }
         
         return base_insights

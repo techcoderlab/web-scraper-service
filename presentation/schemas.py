@@ -36,6 +36,8 @@ class AnalyzeRequest(BaseModel):
         description="Optional CSS selector to wait for before extracting content.",
         examples=["#main-content", "div.loaded"],
     )
+    # Use same ID for context reuse
+    session_id: str | None = Field(default=None, description="Use same ID for context reuse")
 
     @field_validator("wait_selector")
     @classmethod

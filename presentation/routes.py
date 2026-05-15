@@ -130,6 +130,7 @@ async def submit_analysis(body: AnalyzeRequest, request: Request) -> AnalyzeResp
         job_id = await service.submit_analysis(
             url=str(body.url),
             wait_selector=body.wait_selector,
+            session_id=body.session_id,
         )
     except QueueFullError as exc:
         # Pillar 6: map domain error -> HTTP status at presentation boundary

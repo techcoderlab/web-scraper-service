@@ -9,6 +9,7 @@
 # ─────────────────────────────────────────────────────
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 import structlog
@@ -17,12 +18,13 @@ from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
 
 from application.analysis_service import AnalysisService
-from application.config import Settings
+from application.config import settings
 from application.task_queue import TaskQueue
 from infrastructure.browser_pool import BrowserPool
 from infrastructure.logging_config import configure_logging
 from infrastructure.repository import InMemoryAnalysisRepository
 from infrastructure.scraper import PlaywrightScraper
+from infrastructure.session_store import InMemorySessionStore
 from presentation.routes import router
 
 log = structlog.get_logger(__name__)
@@ -47,7 +49,6 @@ async def lifespan(app: FastAPI):
     Args:
         app: The FastAPI application instance.
     """
-    settings = Settings()
     configure_logging(level=settings.LOG_LEVEL)
 
     log.info(
@@ -60,7 +61,12 @@ async def lifespan(app: FastAPI):
     )
 
     # ── Build dependency graph (bottom-up) ────────────────────────────────
-    browser_pool = BrowserPool(settings)
+    session_store = InMemorySessionStore()
+    
+    # Store reference to background task to prevent garbage collection
+    app.state.session_cleanup_task = asyncio.create_task(session_store.start_cleanup_task())
+
+    browser_pool = BrowserPool(settings, session_store)
     await browser_pool.start()
 
     scraper = PlaywrightScraper(pool=browser_pool)
@@ -89,6 +95,10 @@ async def lifespan(app: FastAPI):
 
     # ── Graceful shutdown (reverse order) ─────────────────────────────────
     log.info("shutdown_begin")
+    
+    if hasattr(app.state, "session_cleanup_task"):
+        app.state.session_cleanup_task.cancel()
+        
     await task_queue.stop()
     await scraper.close()
     await browser_pool.stop()
@@ -142,7 +152,6 @@ async def verify_proxy_ip():
 
 
 if __name__ == "__main__":
-    settings = Settings()
     uvicorn.run(
         "main:app",
         host=settings.HOST,
