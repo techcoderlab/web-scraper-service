@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+import random
 
 from playwright.async_api import (
     async_playwright, Browser, BrowserContext, Playwright,
@@ -11,6 +12,7 @@ from playwright_stealth import Stealth
 
 from infrastructure.logging_config import get_logger
 from application.config import Settings
+from infrastructure.proxy_manager import ProxyManager
 
 log = get_logger(__name__)
 
@@ -26,6 +28,7 @@ class BrowserPool:
 
     def __init__(self, settings: Settings) -> None:
         self._settings   = settings
+        self._proxy_manager = ProxyManager(settings)
         self._pw: Playwright | None    = None
         self._browser: Browser | None = None
         self._slots: list[_PoolSlot]   = []
@@ -63,11 +66,30 @@ class BrowserPool:
     # ── Context factory ───────────────────────────────────────────────────────
 
     async def _make_context(self) -> BrowserContext:
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Safari/605.1.15",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+        ]
+        viewports = [
+            {"width": 1920, "height": 1080},
+            {"width": 1366, "height": 768},
+            {"width": 1536, "height": 864},
+            {"width": 1440, "height": 900},
+            {"width": 2560, "height": 1440},
+        ]
+        
+        # get proxy from proxy manager
+        proxy_settings = self._proxy_manager.get_next_proxy()
+
         ctx = await self._browser.new_context(  # type: ignore[union-attr]
-            viewport={"width": 1920, "height": 1080},
+            viewport=random.choice(viewports),
             locale="en-US",
             timezone_id="America/New_York",
-            user_agent=self._settings.USER_AGENT,
+            user_agent=random.choice(user_agents),
+            proxy=proxy_settings,
             java_script_enabled=True,
             ignore_https_errors=False,
             extra_http_headers={

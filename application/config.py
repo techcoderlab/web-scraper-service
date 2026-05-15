@@ -1,5 +1,6 @@
 # ── Application config: 12-factor, all secrets via env ───────────────────────
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -12,11 +13,11 @@ class Settings(BaseSettings):
 
     # Browser pool
     POOL_SIZE: int = 4
-    USER_AGENT: str = (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    )
+    
+    # ... existing settings
+    PROXY_LIST: str = ""
+    PROXY_ROTATING_URL: str = ""
+    
 
     # Resilience
     CB_FAILURE_THRESHOLD: int   = 5

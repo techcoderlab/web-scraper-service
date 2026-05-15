@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import time
+import re
 from collections import Counter
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -19,6 +20,7 @@ import structlog
 from domain.models import AnalysisResult, AnalysisStatus, PageSnapshot
 from domain.ports import AnalysisRepository, BrowserPort
 from application.task_queue import TaskQueue
+from application.extractor_utils import DataExtractor
 
 log = structlog.get_logger(__name__)
 
@@ -160,79 +162,110 @@ class AnalysisService:
         structlog.contextvars.clear_contextvars()
 
     # ── Insight extraction (pure, CPU-light) ──────────────────────────────────
-
     @staticmethod
     def _extract_insights(snapshot: PageSnapshot) -> dict:
-        """Derive structured insights from a scraped PageSnapshot.
-
-        Produces SEO signals, content metrics, and link topology.
-        Pure function — no side effects.
-
-        Args:
-            snapshot: The scraped page data.
-
-        Returns:
-            Dictionary of computed insights.
         """
-        # O(n) where n = len(text) + len(links)
-        words = snapshot.text.split()
-        word_count = len(words)
-
-        # Classify links as internal vs external relative to target domain
-        parsed_origin = urlparse(snapshot.url)
-        origin_domain = parsed_origin.netloc.lower()
-
-        internal_links: list[str] = []
-        external_links: list[str] = []
-        link_domains: list[str] = []
-
-        for link in snapshot.links:
-            parsed = urlparse(link)
-            link_domain = parsed.netloc.lower()
-            link_domains.append(link_domain)
-            if link_domain == origin_domain:
-                internal_links.append(link)
-            else:
-                external_links.append(link)
-
-        # Top external domains — O(n) count + O(k log k) sort where k = unique domains
-        domain_counts = Counter(link_domains)
-        top_linked_domains = [
-            {"domain": d, "count": c}
-            for d, c in domain_counts.most_common(10)
-            if d != origin_domain
-        ]
-
-        # SEO meta-tag signals
-        meta = snapshot.meta
-        has_description = "description" in meta or "og:description" in meta
-        has_og_tags = any(k.startswith("og:") for k in meta)
-        has_twitter_tags = any(k.startswith("twitter:") for k in meta)
-
-        return {
-            "content": {
+        Optimized for AI/LLM pipelines. 
+        Strips unnecessary SEO metrics and returns pure actionable data.
+        """
+        
+        cleaned_text = re.sub(r'\n\s*\n', '\n\n', snapshot.text.strip())
+        
+        # Hard limit of 15,000 characters (approx 3k-4k tokens)
+        # Ensures the n8n AI node does not crash
+        final_text = (cleaned_text[:15000] + '.. [Content Truncated]') if len(cleaned_text) > 15000 else cleaned_text
+        
+        base_insights = {
+            "seo": { 
                 "title": snapshot.title,
-                "word_count": word_count,
-                "text_length": len(snapshot.text),
-                "html_length": len(snapshot.html),
+                "description": snapshot.meta.get("description") or snapshot.meta.get("og:description") or "" 
             },
-            "seo": {
-                "has_title": bool(snapshot.title),
-                "has_meta_description": has_description,
-                "has_open_graph": has_og_tags,
-                "has_twitter_cards": has_twitter_tags,
-                "meta_tag_count": len(meta),
-            },
-            "links": {
-                "total": len(snapshot.links),
-                "internal": len(internal_links),
-                "external": len(external_links),
-                "top_external_domains": top_linked_domains,
-            },
-            "performance": {
-                "final_url": snapshot.final_url,
-                "status_code": snapshot.status_code,
-                "is_redirect": snapshot.url != snapshot.final_url,
-                "has_screenshot": len(snapshot.screenshots) > 0,
-            },
+            "content": { 
+                "text": final_text
+            }
         }
+        
+        base_insights["leads"] = {
+            "emails": DataExtractor.find_emails(snapshot.text),
+            "phones": DataExtractor.find_contacts(snapshot.text),
+            "social_links": DataExtractor.find_social_links(snapshot.links),
+        }
+        
+        return base_insights
+        
+    # @staticmethod
+    # def _extract_insights(snapshot: PageSnapshot) -> dict:
+    #     """Derive structured insights from a scraped PageSnapshot.
+
+    #     Produces SEO signals, content metrics, and link topology.
+    #     Pure function — no side effects.
+
+    #     Args:
+    #         snapshot: The scraped page data.
+
+    #     Returns:
+    #         Dictionary of computed insights.
+    #     """
+    #     # O(n) where n = len(text) + len(links)
+    #     words = snapshot.text.split()
+    #     word_count = len(words)
+
+    #     # Classify links as internal vs external relative to target domain
+    #     parsed_origin = urlparse(snapshot.url)
+    #     origin_domain = parsed_origin.netloc.lower()
+
+    #     internal_links: list[str] = []
+    #     external_links: list[str] = []
+    #     link_domains: list[str] = []
+
+    #     for link in snapshot.links:
+    #         parsed = urlparse(link)
+    #         link_domain = parsed.netloc.lower()
+    #         link_domains.append(link_domain)
+    #         if link_domain == origin_domain:
+    #             internal_links.append(link)
+    #         else:
+    #             external_links.append(link)
+
+    #     # Top external domains — O(n) count + O(k log k) sort where k = unique domains
+    #     domain_counts = Counter(link_domains)
+    #     top_linked_domains = [
+    #         {"domain": d, "count": c}
+    #         for d, c in domain_counts.most_common(10)
+    #         if d != origin_domain
+    #     ]
+
+    #     # SEO meta-tag signals
+    #     meta = snapshot.meta
+    #     has_description = "description" in meta or "og:description" in meta
+    #     has_og_tags = any(k.startswith("og:") for k in meta)
+    #     has_twitter_tags = any(k.startswith("twitter:") for k in meta)
+
+    #     return {
+    #         "content": {
+    #             "title": snapshot.title,
+    #             "word_count": word_count,
+    #             "text_length": len(snapshot.text),
+    #             "html_length": len(snapshot.html),
+    #         },
+    #         "seo": {
+    #             "has_title": bool(snapshot.title),
+    #             "has_meta_description": has_description,
+    #             "has_open_graph": has_og_tags,
+    #             "has_twitter_cards": has_twitter_tags,
+    #             "meta_tag_count": len(meta),
+    #         },
+    #         "links": {
+    #             "total": len(snapshot.links),
+    #             "internal": len(internal_links),
+    #             "external": len(external_links),
+    #             "top_external_domains": top_linked_domains,
+    #         },
+    #         "performance": {
+    #             "final_url": snapshot.final_url,
+    #             "status_code": snapshot.status_code,
+    #             "is_redirect": snapshot.url != snapshot.final_url,
+    #             "has_screenshot": len(snapshot.screenshots) > 0,
+    #         },
+    #     }
+

@@ -83,9 +83,8 @@ async def lifespan(app: FastAPI):
     app.state.browser_pool = browser_pool
     app.state.task_queue = task_queue
     app.state.analysis_service = analysis_service
-
-    log.info("startup_complete")
-
+    
+    
     yield  # ── Application is running ──
 
     # ── Graceful shutdown (reverse order) ─────────────────────────────────
@@ -120,6 +119,26 @@ def create_app() -> FastAPI:
 
 # Module-level app instance for `uvicorn main:app`
 app = create_app()
+
+
+async def verify_proxy_ip():
+   
+    # 2. ipify API ko hit karein jo sirf IP return karti hai
+    test_url = "https://api.ipify.org?format=json"
+    
+    try:
+        print("Checking IP address through scraper...")
+        snapshot = await scraper.fetch(test_url)
+        
+        # Snapshot ke text mein IP address hoga
+        print("-" * 30)
+        print(f"Detected IP: {snapshot.text}")
+        print("-" * 30)
+        
+    except Exception as e:
+        print(f"Error checking IP: {e}")
+    finally:
+        await app_container.browser_pool.stop()
 
 
 if __name__ == "__main__":

@@ -67,16 +67,23 @@ class AnalyzeResponse(BaseModel):
 
 
 class PageSnapshotResponse(BaseModel):
-    """Serialized view of a scraped page snapshot (excludes raw HTML and bytes)."""
-
+    # """Serialized view of a scraped page snapshot (excludes raw HTML and bytes)."""
+    """
+    Lightweight snapshot summary. 
+    Heavy data (content, meta) is shifted to the insights dictionary.
+    """
+    # url: str
+    # final_url: str
+    # status_code: int
+    # title: str
+    # meta: dict[str, str]
+    # link_count: int
+    # text_length: int
+    # has_screenshot: bool
+    # captured_at: datetime
     url: str
     final_url: str
     status_code: int
-    title: str
-    meta: dict[str, str]
-    link_count: int
-    text_length: int
-    has_screenshot: bool
     captured_at: datetime
 
 

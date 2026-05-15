@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import time
+import random
 from typing import Any
 
 import structlog
@@ -65,6 +66,7 @@ class PlaywrightScraper(BrowserPort):
                 if wait_selector:
                     await page.wait_for_selector(wait_selector, timeout=timeout_ms)
 
+                await self._simulate_human_behavior(page)
                 snapshot = await self._build_snapshot(page, url, status)
                 elapsed = (time.monotonic() - t0) * 1000
                 log.info("fetch_complete", duration_ms=round(elapsed, 2))
@@ -82,11 +84,49 @@ class PlaywrightScraper(BrowserPort):
                 await page.close()
                 structlog.contextvars.clear_contextvars()
 
+    async def _simulate_human_behavior(self, page) -> None:
+        """Simulate realistic human interactions (scrolling, mouse movement) to bypass bot detection."""
+        viewport = page.viewport_size
+        height = viewport["height"] if viewport else 1080
+        
+        for _ in range(random.randint(2, 4)):
+            # Scroll down
+            scroll_y = random.randint(100, height // 2)
+            await page.mouse.wheel(delta_x=0, delta_y=scroll_y)
+            await asyncio.sleep(random.uniform(0.3, 1.0))
+            
+            # Mouse move
+            x = random.randint(100, 800)
+            y = random.randint(100, height - 100)
+            await page.mouse.move(x, y, steps=random.randint(5, 10))
+            await asyncio.sleep(random.uniform(0.1, 0.4))
+
     async def _build_snapshot(self, page, url: str, status: int) -> PageSnapshot:
         """Extract structured data from live page DOM."""
         title = await page.title()
         html  = await page.content()
-        text  = await page.inner_text("body")
+        
+        # Remove junk elements using JavaScript
+        await page.evaluate("""() => {
+            const selectorsToRemove = ['nav', 'footer', 'script', 'style', 'header', 'iframe', 'noscript', 'aside', '.ads', '.sidebar', '.footer', '.header', '.nav'];
+            selectorsToRemove.forEach(s => {
+                document.querySelectorAll(s).forEach(el => el.remove());
+            });
+        }""")
+        
+        # Priority order: Article > Main > Body
+        # We will use evaluate to find the best element through JavaScript
+        text = await page.evaluate("""() => {
+            const priorityTags = ['article', 'main', '#content', '.main-content', 'body'];
+            for (const selector of priorityTags) {
+                const el = document.querySelector(selector);
+                if (el && el.innerText.length > 200){
+                    return el.innerText;
+                }
+            }
+            return document.body.innerText;
+        }""")
+        
         final = page.url
 
         # meta tags
